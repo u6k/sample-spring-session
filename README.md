@@ -109,3 +109,81 @@ public class Initializer extends AbstractHttpSessionApplicationInitializer {
 ```
 
 コンストラクタの`super()`に先ほどの`Config`クラスを渡すことで、Spring設定を適用します。
+
+#### セッションを使用する
+
+`HttpSession`が内部的に置き換えられているため、使い方は普段と同じです。
+
+```
+package me.u6k.sample.sample_spring_session_with_servlet;
+
+import java.io.IOException;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+@SuppressWarnings("serial")
+@WebServlet("/")
+public class HelloServlet extends HttpServlet {
+    @Override
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        HttpSession session = req.getSession();
+        if (session.getAttribute("count") == null) {
+            session.setAttribute("count", 0);
+        }
+
+        int count = (Integer) session.getAttribute("count") + 1;
+        session.setAttribute("count", count);
+
+        resp.setContentType("text/plain");
+        resp.getWriter().write("count=" + count);
+    }
+}
+```
+
+`req.getSession()`で`HttpSession`を取得して、`getAttribute()`や`setAttribute()`でセッションに値を入出力します。内部的にはSpring Sessionが使用され、Redisに値が保存されます。
+
+#### 実行する
+
+まず、Redisを起動します。
+
+```
+$ docker run --name redis -d -p 6379:6379 redis
+```
+
+この時点のRedisは空ですが、空であることを確認します。Redisの内容を確認するには、redis-cliを使用します。
+
+```
+$ docker run -it --link redis:redis --rm redis redis-cli -h redis -p 6379
+```
+
+全てのキーを確認してみます。
+
+```
+redis:6379> keys *
+(empty list or set)
+```
+
+空であることが確認できます。
+
+次に、Webアプリケーションを起動します。
+
+```
+$ ./mvnw jetty:run
+```
+
+[http://localhost:8080/](http://localhost:8080/) にアクセスすると、`count=1`が表示されます。再びアクセスすると`count=2`が表示されるはずです。つまり、セッションに値が保存されます。
+
+この時のRedisの内容を確認します。再び、全てのキーを確認してみます。
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:expires:45e774fe-409a-4d70-88bd-f9305696249e"
+2) "spring:session:expirations:1511862420000"
+3) "spring:session:sessions:45e774fe-409a-4d70-88bd-f9305696249e"
+```
+
+セッションに対応するキーが作成されていることが分かります。
