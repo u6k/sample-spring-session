@@ -16,6 +16,13 @@ __Table of Contents:__
         - [依存関係を追加](#依存関係を追加)
         - [Spring Java Configurationを作成](#spring-java-configurationを作成)
         - [Servletコンテナを初期化](#servletコンテナを初期化)
+        - [セッションを使用する](#セッションを使用する)
+        - [実行する](#実行する)
+    - [セッション・タイムアウトを設定した場合](#セッション・タイムアウトを設定した場合)
+    - [Cookie寿命を設定した場合](#cookie寿命を設定した場合)
+- [Maintainer](#maintainer)
+- [Contribute](#contribute)
+- [License](#license)
 
 <!-- /TOC -->
 
@@ -177,13 +184,140 @@ $ ./mvnw jetty:run
 
 [http://localhost:8080/](http://localhost:8080/) にアクセスすると、`count=1`が表示されます。再びアクセスすると`count=2`が表示されるはずです。つまり、セッションに値が保存されます。
 
+![redis session 01](src/site/resources/images/redis-session-01.png)
+
+![redis session 02](src/site/resources/images/redis-session-02.png)
+
 この時のRedisの内容を確認します。再び、全てのキーを確認してみます。
 
 ```
 redis:6379> keys *
-1) "spring:session:sessions:expires:45e774fe-409a-4d70-88bd-f9305696249e"
-2) "spring:session:expirations:1511862420000"
-3) "spring:session:sessions:45e774fe-409a-4d70-88bd-f9305696249e"
+1) "spring:session:sessions:expires:b3d335ac-e57e-4a18-a87f-92282aded73e"
+2) "spring:session:sessions:b3d335ac-e57e-4a18-a87f-92282aded73e"
+3) "spring:session:expirations:1512043860000"
 ```
 
 セッションに対応するキーが作成されていることが分かります。
+
+`Set-Cookie`に`Expires`が設定されていないため、このセッションはWebブラウザを閉じるとWebブラウザから削除されます。Webブラウザを開いて再び [http://localhost:8080/](http://localhost:8080/) にアクセスすると、また`count=1`が表示されます。つまり、新しいセッションが作成されます。この時のRedisの内容を確認すると、次のようにキーが増えていることが分かります。
+
+![redis session 03](src/site/resources/images/redis-session-03.png)
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:expires:5e50fc3c-7f05-431c-840f-93f1a0d0b8e0"
+2) "spring:session:sessions:expires:b3d335ac-e57e-4a18-a87f-92282aded73e"
+3) "spring:session:sessions:b3d335ac-e57e-4a18-a87f-92282aded73e"
+4) "spring:session:sessions:5e50fc3c-7f05-431c-840f-93f1a0d0b8e0"
+5) "spring:session:expirations:1512043980000"
+6) "spring:session:expirations:1512044040000"
+```
+
+### セッション・タイムアウトを設定した場合
+
+`HttpSession`をそのまま使う場合のセッション・タイムアウトは、`web.xml`の`<session-timeout>`に設定しますが、Spring Session with Redisを使用する場合は、`@EnableRedisHttpSession`の`maxInactiveIntervalInSeconds`に設定します。パラメータ名の通り、秒単位です。例えば、セッション・タイムアウトを3分に設定する場合は、以下のように設定します。
+
+```
+@EnableRedisHttpSession(maxInactiveIntervalInSeconds = 150)
+public class Config {
+(中略)
+}
+```
+
+修正したら、先程と同様にRedisを起動して、Webアプリケーションを起動します。起動して [http://localhost:8080/](http://localhost:8080/) にアクセスすると、`count=1`が表示されます。`Set-Cookie`には`Expires`は設定されません。
+
+![session timeout 01](src/site/resources/images/session-timeout-01.png)
+
+この時のRedisの内容を確認します。
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:expires:b7f0fc5f-ccc3-4959-9698-803760bc48a8"
+2) "spring:session:expirations:1512043320000"
+3) "spring:session:sessions:b7f0fc5f-ccc3-4959-9698-803760bc48a8"
+```
+
+分かりづらいですが、`spring:session:expirations:xxx`の値は、最終アクセス時刻から3分後を示しています。
+
+試しにこの状態で3分以上放置してから、再びRedisの状態を確認してみます。
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:b7f0fc5f-ccc3-4959-9698-803760bc48a8"
+```
+
+キーが減りました。つまり、セッションがサーバー側で破棄されました。Webブラウザで [http://localhost:8080/](http://localhost:8080/) にアクセスすると、再び`count=1`が表示されます。
+
+![session timeout 02](src/site/resources/images/session-timeout-02.png)
+
+Redisの状態を確認すると、新しいセッションのキーが増えていることが分かります。
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:expires:e82d2bde-75f7-491f-b1a6-87c2c6eacf85"
+2) "spring:session:sessions:e82d2bde-75f7-491f-b1a6-87c2c6eacf85"
+3) "spring:session:expirations:1512043560000"
+4) "spring:session:sessions:b7f0fc5f-ccc3-4959-9698-803760bc48a8"
+```
+
+### Cookie寿命を設定した場合
+
+セッション・タイムアウトを1分、Cookie寿命を2分に設定した時の挙動を確認します。
+
+`HttpSession`をそのまま使う場合のCookie寿命は、`web.xml`の`<cookie-config>/<max-age>`に設定しますが、Spring Session with Redisの場合は、`CookieSerializer`インスタンスを構築することで設定します。
+
+具体的には、以下のように設定します。
+
+```
+@EnableRedisHttpSession(maxInactiveIntervalInSeconds = 60)
+public class Config {
+(中略)
+
+    @Bean
+    public CookieSerializer cookieSerializer() {
+        DefaultCookieSerializer serializer = new DefaultCookieSerializer();
+        serializer.setCookieMaxAge(120);
+        return serializer;
+    }
+}
+```
+
+詳細は [Spring Session - Custom Cookie](https://docs.spring.io/spring-session/docs/current/reference/html5/guides/custom-cookie.html) をご覧ください。
+
+修正したら、先程と同様にRedisを起動して、Webアプリケーションを起動します。起動して [http://localhost:8080/](http://localhost:8080/) にアクセスすると、`count=1`が表示されます。この時の`Set-Cookie`では`Expires`と`Max-Age`が設定されます。
+
+![cookie maxage 01](src/site/resources/images/cookie-maxage-01.png)
+
+1分以内に同様にアクセスすると、カウントアップされ続けます。
+
+![cookie maxage 02](src/site/resources/images/cookie-maxage-02.png)
+
+Webブラウザを更新し続けていると、最初のアクセスから2分経過後に`count=1`に戻ります。
+
+![cookie maxage 03](src/site/resources/images/cookie-maxage-03.png)
+
+この時のRedisを確認すると、最初のセッション・キーと2回目のセッション・キーの両方が存在します。最初のセッション・キーはこの時点で消滅していないためです。1分ほど放置すると、最初のセッション・キーは消滅します。
+
+```
+redis:6379> keys *
+1) "spring:session:sessions:expires:e9e0bb2a-c003-468a-b99d-ab5fcfae97d7"
+2) "spring:session:sessions:expires:cd116f8e-ed1f-478a-8774-42c5cb4fbbe5"
+3) "spring:session:expirations:1512044820000"
+4) "spring:session:sessions:cd116f8e-ed1f-478a-8774-42c5cb4fbbe5"
+5) "spring:session:sessions:e9e0bb2a-c003-468a-b99d-ab5fcfae97d7"
+```
+
+## Maintainer
+
+- u6k
+    - [u6k.Blog()](https://blog.u6k.me/)
+    - [u6k | GitHub](https://github.com/u6k)
+    - [@u6k_yu1 | Twitter](https://twitter.com/u6k_yu1)
+
+## Contribute
+
+興味を持っていただき、ありがとうございます。当リポジトリについてご連絡がある場合、Issueを作成してください。作成者にご連絡がある場合、Maintainerセクションのいずれかにご連絡ください。
+
+## License
+
+[MIT License](https://github.com/u6k/sample-spring-session-with-servlet/blob/master/LICENSE)
